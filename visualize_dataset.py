@@ -1,15 +1,15 @@
+import wandb
+import matplotlib.pyplot as plt
+import numpy as np
+import tensorflow_datasets as tfds
 import argparse
 import tqdm
 import importlib
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # suppress debug warning messages
-import tensorflow_datasets as tfds
-import numpy as np
-import matplotlib.pyplot as plt
-import wandb
 
 
-WANDB_ENTITY = None
+WANDB_ENTITY = 'erikbauer'
 WANDB_PROJECT = 'vis_rlds'
 
 
@@ -34,11 +34,13 @@ ds = ds.shuffle(100)
 
 # visualize episodes
 for i, episode in enumerate(ds.take(5)):
+    print('Visualizing episode', i)
     images = []
     for step in episode['steps']:
         images.append(step['observation']['image'].numpy())
     image_strip = np.concatenate(images[::4], axis=1)
-    caption = step['language_instruction'].numpy().decode() + ' (temp. downsampled 4x)'
+    caption = step['language_instruction'].numpy().decode() + \
+        ' (temp. downsampled 4x)'
 
     if render_wandb:
         wandb.log({f'image_{i}': wandb.Image(image_strip, caption=caption)})
@@ -50,6 +52,7 @@ for i, episode in enumerate(ds.take(5)):
 # visualize action and state statistics
 actions, states = [], []
 for episode in tqdm.tqdm(ds.take(500)):
+
     for step in episode['steps']:
         actions.append(step['action'].numpy())
         states.append(step['observation']['state'].numpy())
@@ -58,10 +61,13 @@ states = np.array(states)
 action_mean = actions.mean(0)
 state_mean = states.mean(0)
 
+
 def vis_stats(vector, vector_mean, tag):
     assert len(vector.shape) == 2
     assert len(vector_mean.shape) == 1
     assert vector.shape[1] == vector_mean.shape[0]
+
+    print(f'Visualizing {tag}')
 
     n_elems = vector.shape[1]
     fig = plt.figure(tag, figsize=(5*n_elems, 5))
@@ -73,10 +79,11 @@ def vis_stats(vector, vector_mean, tag):
     if render_wandb:
         wandb.log({tag: wandb.Image(fig)})
 
+    print(f'Finished visualizing {tag}')
+
+
 vis_stats(actions, action_mean, 'action_stats')
 vis_stats(states, state_mean, 'state_stats')
 
 if not render_wandb:
     plt.show()
-
-

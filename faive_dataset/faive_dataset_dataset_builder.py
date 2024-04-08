@@ -1,23 +1,26 @@
 from typing import Iterator, Tuple, Any
-
+import os
 import glob
 import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
 import tensorflow_hub as hub
+from dexformer.dataset import h5_tools
+from dexformer.utils.dataset_utils import parse_state_from_sync_df, parse_actions_from_sync_df
 
 
-class ExampleDataset(tfds.core.GeneratorBasedBuilder):
+class FaiveDataset(tfds.core.GeneratorBasedBuilder):
     """DatasetBuilder for example dataset."""
 
     VERSION = tfds.core.Version('1.0.0')
     RELEASE_NOTES = {
-      '1.0.0': 'Initial release.',
+        '1.0.0': 'Initial release.',
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._embed = hub.load("https://tfhub.dev/google/universal-sentence-encoder-large/5")
+        self._embed = hub.load(
+            "https://tfhub.dev/google/universal-sentence-encoder-large/5")
 
     def _info(self) -> tfds.core.DatasetInfo:
         """Dataset metadata (homepage, citation,...)."""
@@ -26,29 +29,35 @@ class ExampleDataset(tfds.core.GeneratorBasedBuilder):
                 'steps': tfds.features.Dataset({
                     'observation': tfds.features.FeaturesDict({
                         'image': tfds.features.Image(
-                            shape=(64, 64, 3),
+                            shape=(540, 960, 3),
                             dtype=np.uint8,
                             encoding_format='png',
-                            doc='Main camera RGB observation.',
+                            doc='Zed camera full desk view, RGB observation',
                         ),
                         'wrist_image': tfds.features.Image(
-                            shape=(64, 64, 3),
+                            shape=(360, 640, 3),
                             dtype=np.uint8,
                             encoding_format='png',
-                            doc='Wrist camera RGB observation.',
+                            doc='OAK-D wrist camera, RGB observation',
+                        ),
+                        'top_image': tfds.features.Image(
+                            shape=(360, 640, 3),
+                            dtype=np.uint8,
+                            encoding_format='png',
+                            doc='OAK-D top camera, RGB observation',
                         ),
                         'state': tfds.features.Tensor(
-                            shape=(10,),
+                            shape=(17,),
                             dtype=np.float32,
-                            doc='Robot state, consists of [7x robot joint angles, '
-                                '2x gripper position, 1x door opening angle].',
+                            doc='Robot state, consists of [6-dim EEF pose (Euler + translation) relative to the robot base,'
+                                '11-dim Faive joint angles]',
                         )
                     }),
                     'action': tfds.features.Tensor(
-                        shape=(10,),
+                        shape=(17,),
                         dtype=np.float32,
-                        doc='Robot action, consists of [7x joint velocities, '
-                            '2x gripper velocities, 1x terminate episode].',
+                        doc='Robot action, consists of [6-dim EEF twist relative to robot base,'
+                        '11-dim Faive joint angles]',
                     ),
                     'discount': tfds.features.Scalar(
                         dtype=np.float32,
@@ -90,36 +99,61 @@ class ExampleDataset(tfds.core.GeneratorBasedBuilder):
     def _split_generators(self, dl_manager: tfds.download.DownloadManager):
         """Define data splits."""
         return {
-            'train': self._generate_examples(path='data/train/episode_*.npy'),
-            'val': self._generate_examples(path='data/val/episode_*.npy'),
+            'train': self._generate_examples(path='/home/erbauer/faive_data/bottle_pick_v1_sample/episode_*.h5'),
+            # 'val': self._generate_examples(path='data/val/episode_*.npy'),
         }
 
     def _generate_examples(self, path) -> Iterator[Tuple[str, Any]]:
-        """Generator of examples for each split."""
+        """
+        Generator of examples for each split.
+        The input path will be globbed.
+
+        """
 
         def _parse_example(episode_path):
             # load raw data --> this should change for your dataset
-            data = np.load(episode_path, allow_pickle=True)     # this is a list of dicts in our case
+            # this is a list of dicts in our case
+            # data = np.load(episode_path, allow_pickle=True)
+            topic_arrays = h5_tools.load_topic_arrays_h5(episode_path)
+            sync_dataframe = h5_tools.build_synchronized_dataframe(
+                '/franka_pose', topic_arrays, 10)
+
+            # parse state from sync dataframe (EEF euler angles + translation, Faive joint angles)
+            robot_states = parse_state_from_sync_df(
+                sync_dataframe).astype(np.float32)
+
+            # parse actions from sync dataframe (EEF twist, Faive joint angles)
+            robot_actions = parse_actions_from_sync_df(
+                sync_dataframe).astype(np.float32)
+
+            task_name = os.path.dirname(episode_path).split(
+                '/')[-1].replace('_', ' ')
+
+            # TODO: get better language descriptions
+            language_desc = task_name
 
             # assemble episode --> here we're assuming demos so we set reward to 1 at the end
             episode = []
-            for i, step in enumerate(data):
+            for i, step in sync_dataframe.iterrows():
                 # compute Kona language embedding
-                language_embedding = self._embed([step['language_instruction']])[0].numpy()
-
+                # language_embedding = self._embed(
+                #     [step['language_instruction']])[0].numpy()
+                language_embedding = self._embed(
+                    [language_desc])[0].numpy()
                 episode.append({
                     'observation': {
-                        'image': step['image'],
-                        'wrist_image': step['wrist_image'],
-                        'state': step['state'],
+                        'image': step['/zed/zed_node/rgb/image_rect_color'],
+                        'wrist_image': step['/oakd_wrist_view/color'],
+                        'top_image': step['/oakd_top_view/color'],
+                        'state': robot_states[i],
                     },
-                    'action': step['action'],
+                    'action': robot_actions[i],
                     'discount': 1.0,
-                    'reward': float(i == (len(data) - 1)),
+                    'reward': float(i == (len(sync_dataframe) - 1)),
                     'is_first': i == 0,
-                    'is_last': i == (len(data) - 1),
-                    'is_terminal': i == (len(data) - 1),
-                    'language_instruction': step['language_instruction'],
+                    'is_last': i == (len(sync_dataframe) - 1),
+                    'is_terminal': i == (len(sync_dataframe) - 1),
+                    'language_instruction': language_desc,
                     'language_embedding': language_embedding,
                 })
 
@@ -147,4 +181,3 @@ class ExampleDataset(tfds.core.GeneratorBasedBuilder):
         #         beam.Create(episode_paths)
         #         | beam.Map(_parse_example)
         # )
-
