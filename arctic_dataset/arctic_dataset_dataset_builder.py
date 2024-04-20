@@ -12,11 +12,11 @@ from dexformer.utils.dataset_utils import (
     parse_actions_from_sync_df,
 )
 
-import sys
 
-file_dir = os.path.abspath(__file__)
-sys.path.append(os.path.join(file_dir, "..", "..", "human_data_preprocessing/"))
-from read_actic_processed_seqs import parse_sequences, load_images
+from human_data_preprocessing.read_actic_processed_seqs import (
+    parse_sequences,
+    load_images,
+)
 
 
 class ArcticDataset(tfds.core.GeneratorBasedBuilder):
