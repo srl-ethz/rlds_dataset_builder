@@ -13,9 +13,10 @@ from dexformer.utils.dataset_utils import (
 )
 
 
-from human_data_preprocessing.read_actic_processed_seqs import (
+from human_data_preprocessing import (
     parse_sequences,
-    load_images,
+    extract_sequence_data,
+    build_obs_action_list,
 )
 
 
@@ -46,33 +47,19 @@ class ArcticDataset(tfds.core.GeneratorBasedBuilder):
                                         shape=(540, 960, 3),
                                         dtype=np.uint8,
                                         encoding_format="png",
-                                        doc="Zed camera full desk view, RGB observation",
-                                    ),
-                                    "wrist_image": tfds.features.Image(
-                                        shape=(360, 640, 3),
-                                        dtype=np.uint8,
-                                        encoding_format="png",
-                                        doc="OAK-D wrist camera, RGB observation",
-                                    ),
-                                    "top_image": tfds.features.Image(
-                                        shape=(360, 640, 3),
-                                        dtype=np.uint8,
-                                        encoding_format="png",
-                                        doc="OAK-D top camera, RGB observation",
+                                        doc="RGB image of the scene.",
                                     ),
                                     "state": tfds.features.Tensor(
                                         shape=(17,),
                                         dtype=np.float32,
-                                        doc="Robot state, consists of [6-dim EEF pose (Euler + translation) relative to the robot base,"
-                                        "11-dim Faive joint angles]",
+                                        doc="Two human hands, absolute poses (using XYZ Euler) in the workspace and 45-dimensional MANO parameters. [pose_r, pose_l, mano_r, mano_l]",
                                     ),
                                 }
                             ),
                             "action": tfds.features.Tensor(
-                                shape=(17,),
+                                shape=(102,),
                                 dtype=np.float32,
-                                doc="Robot action, consists of [6-dim EEF twist relative to robot base,"
-                                "11-dim Faive joint angles]",
+                                doc="Two human hands, represented as delta poses (using XYZ Euler) and 45-dimensional MANO parameters. [pose_r, pose_l, mano_r, mano_l]",
                             ),
                             "discount": tfds.features.Scalar(
                                 dtype=np.float32,
@@ -92,15 +79,15 @@ class ArcticDataset(tfds.core.GeneratorBasedBuilder):
                                 dtype=np.bool_,
                                 doc="True on last step of the episode if it is a terminal step, True for demos.",
                             ),
-                            "language_instruction": tfds.features.Text(
-                                doc="Language Instruction."
-                            ),
-                            "language_embedding": tfds.features.Tensor(
-                                shape=(512,),
-                                dtype=np.float32,
-                                doc="Kona language embedding. "
-                                "See https://tfhub.dev/google/universal-sentence-encoder-large/5",
-                            ),
+                            # "language_instruction": tfds.features.Text(
+                            #     doc="Language Instruction."
+                            # ),
+                            # "language_embedding": tfds.features.Tensor(
+                            #     shape=(512,),
+                            #     dtype=np.float32,
+                            #     doc="Kona language embedding. "
+                            #     "See https://tfhub.dev/google/universal-sentence-encoder-large/5",
+                            # ),
                         }
                     ),
                     "episode_metadata": tfds.features.FeaturesDict(
@@ -117,7 +104,10 @@ class ArcticDataset(tfds.core.GeneratorBasedBuilder):
     def _split_generators(self, dl_manager: tfds.download.DownloadManager):
         """Define data splits."""
         return {
-            "train": self._generate_examples(seq_dir="", im_dir=""),
+            "train": self._generate_examples(
+                seq_dir="/home/erbauer/srl-nas-faive/Datasets/ARCTIC/outputs/processed/seqs/",
+                im_dir="/home/erbauer/srl-nas-faive/Datasets/ARCTIC/data/arctic_data/data/images/",
+            ),
             # 'val': self._generate_examples(path='data/val/episode_*.npy'),
         }
 
@@ -134,89 +124,31 @@ class ArcticDataset(tfds.core.GeneratorBasedBuilder):
             # data = np.load(episode_path, allow_pickle=True)
             view_ids = [str(i) for i in range(9)]
 
-            world_coord_info = seq_data["world_coord"]
-            cam_coord_info = seq_data["cam_coord"]
-            seq_info_2d = seq_data["2d"]
-            bbox_data = seq_data["bbox"]
-            params = seq_data["params"]
+            data_dict = extract_sequence_data(seq_data, image_generator, view_ids)
 
-            # ## GEOMETRY PARAMS
-            # # all in world world frame
-            #
-            # # mano rotations
-            # rot_r = params["rot_r"]
-            # rot_l = params["rot_l"]
-            #
-            # # mano translations
-            # trans_r = params["trans_r"]
-            # trans_l = params["trans_l"]
-            #
-            # # smplx translation and rotation
-            # rot_body = params["smplx_global_orient"]
-            # trans_body = params["smplx_trans"]
-            #
-            # # 4x4 transform from world to ego camera coordinates
-            #
-            # arctic stuff
-            num_frames = seq_info_2d["joints.right"].shape[0]
+            episode_data = build_obs_action_list(data_dict)
 
-            # TODO: Before implementing more, we must discuss what to put in the dataset
-
-            for idx in tqdm.tqdm(range(num_frames)):
-                imgs = next(image_generator)
-                out_imgs = []
-                for view_id in view_ids:
-                    keypoints_right_2d = seq_info_2d["joints.right"][
-                        idx, int(view_id)
-                    ]  # 21 x 2
-                    keypoints_left_2d = seq_info_2d["joints.left"][
-                        idx, int(view_id)
-                    ]  # 21 x 2
-
-                    img = imgs[view_id]
-
-            #
-            # topic_arrays = h5_tools.load_topic_arrays_h5(episode_path)
-            # sync_dataframe = h5_tools.build_synchronized_dataframe(
-            #     '/franka_pose', topic_arrays, 10)
-            #
-            # # parse state from sync dataframe (EEF euler angles + translation, Faive joint angles)
-            # robot_states = parse_state_from_sync_df(
-            #     sync_dataframe).astype(np.float32)
-            #
-            # # parse actions from sync dataframe (EEF twist, Faive joint angles)
-            # robot_actions = parse_actions_from_sync_df(
-            #     sync_dataframe).astype(np.float32)
-            #
-            # task_name = os.path.dirname(episode_path).split(
-            #     '/')[-1].replace('_', ' ')
             #
             # # TODO: get better language descriptions
             # language_desc = task_name
             #
             # assemble episode --> here we're assuming demos so we set reward to 1 at the end
             episode = []
-            for i, step in sync_dataframe.iterrows():
+            for i, step in enumerate(episode_data):
                 # compute Kona language embedding
                 # language_embedding = self._embed(
                 #     [step['language_instruction']])[0].numpy()
-                language_embedding = self._embed([language_desc])[0].numpy()
+                # language_embedding = self._embed([language_desc])[0].numpy()
                 episode.append(
                     {
-                        "observation": {
-                            "image": step["/zed/zed_node/rgb/image_rect_color"],
-                            "wrist_image": step["/oakd_wrist_view/color"],
-                            "top_image": step["/oakd_top_view/color"],
-                            "state": robot_states[i],
-                        },
-                        "action": robot_actions[i],
+                        **step,
                         "discount": 1.0,
                         "reward": float(i == (len(sync_dataframe) - 1)),
                         "is_first": i == 0,
                         "is_last": i == (len(sync_dataframe) - 1),
                         "is_terminal": i == (len(sync_dataframe) - 1),
-                        "language_instruction": language_desc,
-                        "language_embedding": language_embedding,
+                        # "language_instruction": language_desc,
+                        # "language_embedding": language_embedding,
                     }
                 )
 
