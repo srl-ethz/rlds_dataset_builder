@@ -14,12 +14,13 @@ from dexformer.utils.dataset_utils import (
 )
 
 
-from human_data_preprocessing import (
+from human_data_preprocessing import build_obs_action_list
+from human_data_preprocessing.arctic import (
     parse_sequences,
     extract_sequence_data,
-    build_obs_action_list,
     load_images,
 )
+
 
 
 class ArcticDataset(tfds.core.GeneratorBasedBuilder):
@@ -120,17 +121,19 @@ class ArcticDataset(tfds.core.GeneratorBasedBuilder):
 
         """
 
-        def _parse_example(seq_path, seq_data, image_generator):
+        def _parse_example(config):
             # load raw data --> this should change for your dataset
             # this is a list of dicts in our case
             # data = np.load(episode_path, allow_pickle=True)
-            # view_ids = [str(i) for i in range(1)]
-            view_ids = [
-                "0",
-            ]
+            # view_ids = [str(i) for i in range(9)]
+            # view_ids = [
+            #     "0",
+            # ]
+
+            seq_path, seq_data, image_generator, view_id = config
 
             start_time = time.time()
-            data_dict = extract_sequence_data(seq_data, image_generator, view_ids)
+            data_dict = extract_sequence_data(seq_data, image_generator, [view_id,])
             print(f"Extracted data in {time.time() - start_time:.2f}s")
 
             episode_data = build_obs_action_list(
@@ -166,18 +169,36 @@ class ArcticDataset(tfds.core.GeneratorBasedBuilder):
             sample = {"steps": episode, "episode_metadata": {"file_path": seq_path}}
 
             # if you want to skip an example for whatever reason, simply return None
-            return seq_path, sample
+            return seq_path + view_id, sample
 
         # for smallish datasets, use single-thread parsing
-        seq_idx = 0
+        view_ids = [str(i) for i in range(9)]
+        num_completed = 0
+        configs = []
+        print('Generating configs...')
         for seq_path, seq_data, image_generator in parse_sequences(seq_dir, im_dir):
-            # image_generator = load_images(im_data)
-            print(f"Processing sequence {seq_idx}")
-            yield _parse_example(seq_path, seq_data, image_generator)
+            for view_id in view_ids:
+                configs.append((seq_path, seq_data, image_generator, view_id))
+
+        print('Done generating configs!')
+        # for seq_path, seq_data, image_generator in parse_sequences(seq_dir, im_dir):
+        #     for view_id in view_ids:
+        #         yield _parse_example(seq_path, seq_data, image_generator, view_id)
+
+            # num_completed += 1
+            # print(f"Completed {num_completed} sequences")
+
+            # if num_completed == 2:
+            #     break
+
+        print(f'Number of configs: {len(configs)}')
+
+        for config in configs:
+            yield _parse_example(config)
 
         # for large datasets use beam to parallelize data parsing (this will have initialization overhead)
         # beam = tfds.core.lazy_imports.apache_beam
         # return (
-        #         beam.Create(episode_paths)
+        #         beam.Create(configs)
         #         | beam.Map(_parse_example)
         # )
