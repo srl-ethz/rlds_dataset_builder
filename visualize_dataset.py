@@ -16,6 +16,7 @@ WANDB_PROJECT = "vis_rlds"
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--dataset_name", help="name of the dataset to visualize")
+parser.add_argument("--data_dir", help="directory the dataset is saved in")
 args = parser.parse_args()
 
 if WANDB_ENTITY is not None:
@@ -29,7 +30,7 @@ else:
 dataset_name = args.dataset_name
 print(f"Visualizing data from dataset: {dataset_name}")
 module = importlib.import_module(dataset_name)
-ds = tfds.load(dataset_name, split="train")
+ds = tfds.load(dataset_name, split="train", data_dir=args.data_dir)
 ds = ds.shuffle(100)
 
 # visualize episodes

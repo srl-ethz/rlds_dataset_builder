@@ -12,12 +12,12 @@ from dataset_parser.faive import load_dataset
 from dataset_parser.conversion_config import conversion_config
 
 
-class FaiveDataset(tfds.core.GeneratorBasedBuilder):
+class FaivePlushPickDataset(tfds.core.GeneratorBasedBuilder):
     """DatasetBuilder for example dataset."""
 
-    VERSION = tfds.core.Version("1.0.5")
+    VERSION = tfds.core.Version("1.0.0")
     RELEASE_NOTES = {
-        "1.0.5": "Collection of 17 teleop datasets with delta EEF actions and absolute joint angles. Data can include wrist images, if availeble, otherwise, zeros are used.",
+        "1.0.0": "Collection of teleop datasets with delta EEF actions and absolute joint angles. Data can include wrist images, if availeble, otherwise, zeros are used.",
     }
 
     def __init__(self, *args, **kwargs):

@@ -98,7 +98,7 @@ class Hoi4dDataset(tfds.core.GeneratorBasedBuilder):
         """Define data splits."""
         return {
             "train": self._generate_examples(
-                root_dir="/media/erik/eb-data/hoi4d"
+                root_dir="/data2/erbauer/hoi4d"
             ),
             # 'val': self._generate_examples(path='data/val/episode_*.npy'),
         }

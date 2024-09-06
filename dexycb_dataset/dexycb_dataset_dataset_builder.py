@@ -98,7 +98,7 @@ class DexycbDataset(tfds.core.GeneratorBasedBuilder):
         """Define data splits."""
         return {
             "train": self._generate_examples(
-                root_dir="/media/erik/eb-data/dexycb"
+                root_dir="/home/erbauer/srl-nas-faive/Datasets/dexycb/"
             ),
             # 'val': self._generate_examples(path='data/val/episode_*.npy'),
         }
