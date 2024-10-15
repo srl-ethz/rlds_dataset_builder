@@ -11,6 +11,8 @@ import tensorflow_hub as hub
 from dataset_parser import build_obs_action_list
 from dataset_parser.dexycb import load_all_episodes
 
+MODE = "single_hand"
+ACTION_DIM = 51
 
 
 class DexycbDataset(tfds.core.GeneratorBasedBuilder):
@@ -18,7 +20,7 @@ class DexycbDataset(tfds.core.GeneratorBasedBuilder):
 
     VERSION = tfds.core.Version("1.0.0")
     RELEASE_NOTES = {
-        "1.0.0": "Initial release.",
+        "1.0.0": "Single-handed version",
     }
 
     def __init__(self, *args, **kwargs):
@@ -43,14 +45,14 @@ class DexycbDataset(tfds.core.GeneratorBasedBuilder):
                                         doc="RGB image of the scene.",
                                     ),
                                     "state": tfds.features.Tensor(
-                                        shape=(102,),
+                                        shape=(ACTION_DIM,),
                                         dtype=np.float32,
                                         doc="At the moment, just zeros.",
                                     ),
                                 }
                             ),
                             "action": tfds.features.Tensor(
-                                shape=(102,),
+                                shape=(ACTION_DIM,),
                                 dtype=np.float32,
                                 doc="Two human hands, represented as delta poses (using XYZ Euler) and 45-dimensional MANO parameters. [pose_r, pose_l, mano_r, mano_l]",
                             ),
@@ -98,7 +100,7 @@ class DexycbDataset(tfds.core.GeneratorBasedBuilder):
         """Define data splits."""
         return {
             "train": self._generate_examples(
-                root_dir="/media/erik/eb-data/dexycb"
+                root_dir="/home/erbauer/srl-nas-faive/Datasets/dexycb"
             ),
             # 'val': self._generate_examples(path='data/val/episode_*.npy'),
         }
