@@ -7,7 +7,6 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
 import tensorflow_hub as hub
-
 from dataset_parser.faive import load_dataset
 from dataset_parser.conversion_config import conversion_config
 
@@ -15,9 +14,9 @@ from dataset_parser.conversion_config import conversion_config
 class FaiveCubeSortDataset(tfds.core.GeneratorBasedBuilder):
     """DatasetBuilder for example dataset."""
 
-    VERSION = tfds.core.Version("1.0.0")
+    VERSION = tfds.core.Version("1.0.4")
     RELEASE_NOTES = {
-        "1.0.0": "Collection of teleop datasets with delta EEF actions and absolute joint angles. Data can include wrist images, if availeble, otherwise, zeros are used.",
+        "1.0.4": "Pokemon pick data without wrist images, actions are absolute poses [euler, trans] and gripper angles. Includes separate keys for robot and hand proprio.",
     }
 
     def __init__(self, *args, **kwargs):
@@ -59,13 +58,23 @@ class FaiveCubeSortDataset(tfds.core.GeneratorBasedBuilder):
                                         doc="Robot state, consists of [6-dim EEF pose (Euler + translation) relative to the robot base,"
                                         "11-dim Faive joint angles]",
                                     ),
+                                    "robot_pose": tfds.features.Tensor(
+                                        shape=(6,),
+                                        dtype=np.float32,
+                                        doc="Robot pose, [3-dim eulerXYZ rot, 3-dim translation]",
+                                    ),
+                                    "gripper_angles": tfds.features.Tensor(
+                                        shape=(11,),
+                                        dtype=np.float32,
+                                        doc="Gripper angles (absolute).",
+                                    ),
                                 }
                             ),
                             "action": tfds.features.Tensor(
                                 shape=(17,),
                                 dtype=np.float32,
                                 doc="Robot action, [3-dim eulerXYZ rot, 3-dim translation, faive joint angles],"
-                                "11-dim Faive joint angles]. First 6 are absolute deltas in the world frame (robot base), last 11 are absolute.",
+                                "11-dim Faive joint angles]",
                             ),
                             "discount": tfds.features.Scalar(
                                 dtype=np.float32,
@@ -109,17 +118,13 @@ class FaiveCubeSortDataset(tfds.core.GeneratorBasedBuilder):
 
     def _split_generators(self, dl_manager: tfds.download.DownloadManager):
         """Define data splits."""
-
-        cfg = conversion_config['faive']
         return {
-            "train": self._generate_examples(cfg),
-            # "val": self._generate_examples(test_set),
-            # 'val': self._generate_examples(path='data/val/episode_*.npy'),
+            "train": self._generate_examples(),
         }
 
-    def _generate_examples(self, cfg) -> Iterator[Tuple[str, Any]]:
+    def _generate_examples(self) -> Iterator[Tuple[str, Any]]:
         """
-        cfg: config dict
+        episode_paths: List of file paths.
 
         Generator of examples for each split.
         The input path will be globbed.
@@ -127,27 +132,29 @@ class FaiveCubeSortDataset(tfds.core.GeneratorBasedBuilder):
         """
 
         def _parse_example(episode_path, episode_data):
+            # load raw data --> this should change for your dataset
+            # this is a list of dicts in our case
+            # data = np.load(episode_path, allow_pickle=True)
 
+            # compute robot_actions[i] (deltas that the model should learn) = robot_actions[i+1] - robot_actions[i]
             # assemble episode --> here we're assuming demos so we set reward to 1 at the end
             episode = []
             for i, step in enumerate(episode_data):
                 # compute Kona language embedding
                 # language_embedding = self._embed(
                 #     [step['language_instruction']])[0].numpy()
-                language_desc = episode_data[i]['language_instruction']
-                language_embedding = self._embed([language_desc])[0].numpy()
+                language_embedding = self._embed([step["language_instruction"]])[0].numpy()
                 episode.append(
                     {
-                        **episode_data[i],
+                        **step,
                         "discount": 1.0,
                         "reward": float(i == (len(episode_data) - 1)),
                         "is_first": i == 0,
                         "is_last": i == (len(episode_data) - 1),
                         "is_terminal": i == (len(episode_data) - 1),
-                        # "language_instruction": language_desc,
                         "language_embedding": language_embedding,
                     }
-                )
+               )
 
             # create output data sample
             sample = {"steps": episode, "episode_metadata": {"file_path": episode_path}}
@@ -155,8 +162,10 @@ class FaiveCubeSortDataset(tfds.core.GeneratorBasedBuilder):
             # if you want to skip an example for whatever reason, simply return None
             return episode_path, sample
 
+
         # for smallish datasets, use single-thread parsing
-        for episode_path, episode_data in load_dataset(cfg):
+        dataset_names = ["cube_sort_v1", "cube_sort_v2"]
+        for episode_path, episode_data in load_dataset(conversion_config["faive"], selected_dataset_names=dataset_names):
             yield _parse_example(episode_path, episode_data)
 
         # for large datasets use beam to parallelize data parsing (this will have initialization overhead)
