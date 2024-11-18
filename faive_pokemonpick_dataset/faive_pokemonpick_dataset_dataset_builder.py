@@ -1,26 +1,22 @@
 from typing import Iterator, Tuple, Any
+import random
 import os
 import glob
+from copy import deepcopy
 import numpy as np
 import tensorflow as tf
-import tqdm
-import time
 import tensorflow_datasets as tfds
 import tensorflow_hub as hub
-
-from dataset_parser import build_obs_action_list
-from dataset_parser.dexycb import load_all_episodes
-
-MODE = "single_hand"
-ACTION_DIM = 189 + 6 # local 6d representation + 6d pose
+from dataset_parser.faive import load_dataset
+from dataset_parser.conversion_config import conversion_config
 
 
-class DexycbDataset(tfds.core.GeneratorBasedBuilder):
+class FaivePokemonPickDataset(tfds.core.GeneratorBasedBuilder):
     """DatasetBuilder for example dataset."""
 
-    VERSION = tfds.core.Version("1.0.0")
+    VERSION = tfds.core.Version("1.0.4")
     RELEASE_NOTES = {
-        "1.0.0": "Single-handed version",
+        "1.0.4": "Pokemon pick data without wrist images, actions are absolute poses [euler, trans] and gripper angles. Includes separate keys for robot and hand proprio.",
     }
 
     def __init__(self, *args, **kwargs):
@@ -42,19 +38,43 @@ class DexycbDataset(tfds.core.GeneratorBasedBuilder):
                                         shape=(256, 256, 3),
                                         dtype=np.uint8,
                                         encoding_format="png",
-                                        doc="RGB image of the scene.",
+                                        doc="Zed camera full desk view, RGB observation",
+                                    ),
+                                    "wrist": tfds.features.Image(
+                                        shape=(256, 256, 3),
+                                        dtype=np.uint8,
+                                        encoding_format="png",
+                                        doc="OAK-D wrist camera, RGB observation",
+                                    ),
+                                    "secondary": tfds.features.Image(
+                                        shape=(256, 256, 3),
+                                        dtype=np.uint8,
+                                        encoding_format="png",
+                                        doc="OAK-D top camera, RGB observation",
                                     ),
                                     "state": tfds.features.Tensor(
-                                        shape=(ACTION_DIM,),
+                                        shape=(17,),
                                         dtype=np.float32,
-                                        doc="At the moment, just zeros.",
+                                        doc="Robot state, consists of [6-dim EEF pose (Euler + translation) relative to the robot base,"
+                                        "11-dim Faive joint angles]",
+                                    ),
+                                    "robot_pose": tfds.features.Tensor(
+                                        shape=(6,),
+                                        dtype=np.float32,
+                                        doc="Robot pose, [3-dim eulerXYZ rot, 3-dim translation]",
+                                    ),
+                                    "gripper_angles": tfds.features.Tensor(
+                                        shape=(11,),
+                                        dtype=np.float32,
+                                        doc="Gripper angles (absolute).",
                                     ),
                                 }
                             ),
                             "action": tfds.features.Tensor(
-                                shape=(ACTION_DIM,),
+                                shape=(17,),
                                 dtype=np.float32,
-                                doc="Two human hands, represented as delta poses (using XYZ Euler) and 45-dimensional MANO parameters. [pose_r, pose_l, mano_r, mano_l]",
+                                doc="Robot action, [3-dim eulerXYZ rot, 3-dim translation, faive joint angles],"
+                                "11-dim Faive joint angles]",
                             ),
                             "discount": tfds.features.Scalar(
                                 dtype=np.float32,
@@ -93,46 +113,37 @@ class DexycbDataset(tfds.core.GeneratorBasedBuilder):
                         }
                     ),
                 }
-            )
+            ),
         )
 
     def _split_generators(self, dl_manager: tfds.download.DownloadManager):
         """Define data splits."""
         return {
-            "train": self._generate_examples(
-                root_dir="/mnt/data1/erbauer/dexycb/"
-            ),
-            # 'val': self._generate_examples(path='data/val/episode_*.npy'),
+            "train": self._generate_examples(),
         }
 
-    def _generate_examples(self, root_dir) -> Iterator[Tuple[str, Any]]:
+    def _generate_examples(self) -> Iterator[Tuple[str, Any]]:
         """
+        episode_paths: List of file paths.
+
         Generator of examples for each split.
         The input path will be globbed.
 
         """
 
-        def _parse_example(episode_id, data_dict):
+        def _parse_example(episode_path, episode_data):
+            # load raw data --> this should change for your dataset
+            # this is a list of dicts in our case
+            # data = np.load(episode_path, allow_pickle=True)
 
-            episode_data = build_obs_action_list(
-                dataset_name="dexycb", human_data_dict=data_dict
-            )
-
-            #
-            # # TODO: get better language descriptions
-            language_desc = ""
-            #
+            # compute robot_actions[i] (deltas that the model should learn) = robot_actions[i+1] - robot_actions[i]
             # assemble episode --> here we're assuming demos so we set reward to 1 at the end
             episode = []
             for i, step in enumerate(episode_data):
                 # compute Kona language embedding
-                # language_embedding = self._embed([step["language_instruction"]])[
-                # 0
-                # ].numpy()
-
-                assert step["action"].shape[0] == ACTION_DIM, "Action dimension should be {}".format(ACTION_DIM)
-
-                language_embedding = self._embed([language_desc])[0].numpy()
+                # language_embedding = self._embed(
+                #     [step['language_instruction']])[0].numpy()
+                language_embedding = self._embed([step["language_instruction"]])[0].numpy()
                 episode.append(
                     {
                         **step,
@@ -141,25 +152,25 @@ class DexycbDataset(tfds.core.GeneratorBasedBuilder):
                         "is_first": i == 0,
                         "is_last": i == (len(episode_data) - 1),
                         "is_terminal": i == (len(episode_data) - 1),
-                        "language_instruction": language_desc,
                         "language_embedding": language_embedding,
                     }
-                )
+               )
 
             # create output data sample
-            sample = {"steps": episode, "episode_metadata": {"file_path": episode_id}}
+            sample = {"steps": episode, "episode_metadata": {"file_path": episode_path}}
 
             # if you want to skip an example for whatever reason, simply return None
-            return episode_id, sample
+            return episode_path, sample
+
 
         # for smallish datasets, use single-thread parsing
-        for episode_id, data_dict in load_all_episodes(root_dir):
-            yield _parse_example(episode_id, data_dict)
+        dataset_names = ["pokemon_pick_basic", "pokemon_pick_v2", "pokemon_pick_v3"]
+        for episode_path, episode_data in load_dataset(conversion_config["faive"], selected_dataset_names=dataset_names):
+            yield _parse_example(episode_path, episode_data)
 
-        # for seq_path, seq_data, image_
         # for large datasets use beam to parallelize data parsing (this will have initialization overhead)
         # beam = tfds.core.lazy_imports.apache_beam
         # return (
-        #         beam.Create(configs)
+        #         beam.Create(episode_paths)
         #         | beam.Map(_parse_example)
         # )
